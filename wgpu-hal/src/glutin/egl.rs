@@ -46,7 +46,7 @@ fn parse_egl_version(version_str: &str) -> Option<(i32, i32)> {
 }
 
 #[derive(Clone, Debug)]
-struct EglContext {
+pub struct EglContext {
     pub context: Arc<glutin::api::egl::context::PossiblyCurrentContext>,
     version: (i32, i32),
     pub display: glutin::api::egl::display::Display,
@@ -54,19 +54,13 @@ struct EglContext {
 }
 
 impl EglContext {
-    fn make_current(&self) {
-        let res = self.context.make_current_surfaceless();
-        if res.is_err() {
-            log::error!("Error in make_current_surfaceless");
-        }
+    pub fn make_current(&self) -> Result<(), glutin::error::Error> {
+        self.context.make_current_surfaceless()
     }
 
-    fn unmake_current(&self) {
+    pub fn unmake_current(&self) -> Result<(), glutin::error::Error> {
         // TODO is make_not_current_in_place() okay, or should we switch to make_not_current?
-        let res = self.context.make_not_current_in_place();
-        if res.is_err() {
-            log::error!("Error in make_current_surfaceless");
-        }
+        self.context.make_not_current_in_place()
     }
 }
 
@@ -127,7 +121,11 @@ impl Drop for AdapterContext {
         struct CurrentGuard<'a>(&'a EglContext);
         impl Drop for CurrentGuard<'_> {
             fn drop(&mut self) {
-                self.0.unmake_current();
+                let res = self.0.unmake_current();
+                log::error!(
+                    "GLUTIN_DEBUG: AdapterContext::drop unmake_current() - {:?}",
+                    res
+                );
             }
         }
 
@@ -138,7 +136,11 @@ impl Drop for AdapterContext {
         // requires the context to be current when anything that may be holding
         // the `Arc<AdapterShared>` is dropped.
         let _guard = self.egl.as_ref().map(|egl| {
-            egl.make_current();
+            let res = egl.make_current();
+            log::error!(
+                "GLUTIN_DEBUG: AdapterContext::drop make_current() - {:?}",
+                res
+            );
             CurrentGuard(&egl)
         });
         let glow = self.glow.get_mut();
@@ -171,7 +173,7 @@ impl<'a> Drop for AdapterContextLock<'a> {
         if let Some(egl) = self.egl.take() {
             let res = egl.context.make_not_current_in_place();
             if res.is_err() {
-                log::error!("Cannot make_not_current_in_place()");
+                log::error!("Cannot make_not_current_in_place() - {:?}", res.err());
             }
         }
     }
@@ -209,7 +211,11 @@ impl AdapterContext {
             .expect("Could not lock adapter context. This is most-likely a deadlock.");
 
         let egl = self.egl.as_ref().map(|egl| {
-            egl.make_current();
+            let res = egl.make_current();
+            log::error!(
+                "GLUTIN_DEBUG: AdapterContext::lock make_current() - {:?}",
+                res
+            );
             EglContextLock {
                 context: &egl.context,
                 display: egl.display.clone(),
@@ -522,7 +528,11 @@ impl crate::Instance for Instance {
 
         // drop(old_inner);
 
-        inner.egl.unmake_current();
+        let res = inner.egl.unmake_current();
+        log::error!(
+            "GLUTIN_DEBUG: Instance::create_surface unmake_current() - {:?}",
+            res
+        );
 
         Ok(Surface {
             egl: inner.egl.clone(),
@@ -540,7 +550,12 @@ impl crate::Instance for Instance {
         _surface_hint: Option<&<Self::A as crate::Api>::Surface>,
     ) -> Vec<crate::ExposedAdapter<Self::A>> {
         let inner = self.inner.lock();
-        inner.egl.make_current();
+
+        let res = inner.egl.make_current();
+        log::error!(
+            "GLUTIN_DEBUG: Instance::enumerate_adapters make_current() - {:?}",
+            res
+        );
 
         let mut gl = unsafe {
             glow::Context::from_loader_function(|name| {
@@ -573,7 +588,12 @@ impl crate::Instance for Instance {
         // GLOW context, which could also happen if a panic occurs after we uncurrent the context
         // below but before AdapterContext is constructed.
         let gl = ManuallyDrop::new(gl);
-        inner.egl.unmake_current();
+
+        let res = inner.egl.unmake_current();
+        log::error!(
+            "GLUTIN_DEBUG: Instance::enumerate_adapters unmake_current() - {:?}",
+            res
+        );
 
         unsafe {
             super::Adapter::expose(AdapterContext {
@@ -625,9 +645,10 @@ impl Surface {
         let sc = swapchain.as_ref().unwrap();
 
         let res = self.egl.context.make_current(&sc.surface);
-        if res.is_err() {
-            log::error!("Failed make_current()");
-        }
+        log::error!(
+            "GLUTIN_DEBUG: Surface::present() Failed make_current() - {:?}",
+            res
+        );
 
         unsafe { gl.disable(glow::SCISSOR_TEST) };
         unsafe { gl.color_mask(true, true, true, true) };
@@ -668,7 +689,11 @@ impl Surface {
         let _ = sc.surface.swap_buffers(&self.egl.context);
 
         // make current surfaceless
-        self.egl.unmake_current();
+        let res = self.egl.unmake_current();
+        log::error!(
+            "GLUTIN_DEBUG: Surface::present unmake_current() - {:?}",
+            res
+        );
 
         Ok(())
     }
